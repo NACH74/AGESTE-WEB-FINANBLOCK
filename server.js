@@ -1,30 +1,59 @@
-import 'dotenv/config'
-import express from 'express'
-import cors from 'cors'
-import OpenAI from 'openai'
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import OpenAI from 'openai';
 
-const app = express()
-app.use(cors())
-app.use(express.json())
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
+// Endpoint principal de chat
 app.post('/api/chat', async (req, res) => {
-  const messages = req.body?.messages || []
-  res.setHeader('Content-Type', 'application/json')
-
   try {
-    const completion = await openai.responses.create({
+    const messages = req.body?.messages || [];
+
+    // Configurar streaming NDJSON
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-cache');
+
+    const response = await openai.responses.stream({
       model: 'gpt-4o-mini',
-      input: messages.map(m => ({ role: m.role, content: m.content })),
-    })
+      input: messages.map(m => ({ role: m.role, content: m.content }))
+    });
 
-    const text = completion.output_text
-    res.json({ reply: text })
+    response.on('message', (msg) => {
+      if (msg.type === 'response.output_text.delta') {
+        res.write(JSON.stringify({ delta: msg.delta }) + '\n');
+      }
+    });
+
+    response.on('end', () => {
+      res.write(JSON.stringify({ done: true }) + '\n');
+      res.end();
+    });
+
+    response.on('error', (err) => {
+      console.error('Error en streaming:', err);
+      if (!res.headersSent) res.status(500);
+      res.end();
+    });
+
   } catch (err) {
-    console.error('Error en el servidor:', err)
-    res.status(500).json({ error: 'No se pudo contactar con OpenAI' })
+    console.error('Error en /api/chat:', err);
+    res.status(500).json({ error: 'Error interno en el servidor' });
   }
-})
+});
 
-app.listen(3000, () => console.log('✅ Servidor listo en http://localhost:3000'))
+// Solo inicia el servidor si está en desarrollo (localhost)
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () =>
+    console.log(`✅ Servidor local escuchando en http://localhost:${PORT}`)
+  );
+}
+
+export default app;
